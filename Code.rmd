@@ -1,0 +1,789 @@
+---
+title: "Functions and Simulation Code"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(MASS)
+```
+
+## Data Generation Functions
+```{r}
+# newdata() is adapted, and qgh(), paired(), and unpaired() are sourced, from:
+# E. N. Johnson and S. J. Richter. Permutation tests for mixed
+#   paired and two-sample designs. Computational Statistics, 37(2):
+#   739–750, August 2021. doi: 10.1007/s00180-021-01137-9. URL
+#   https://doi.org/10.1007/s00180-021-01137-9
+
+
+qgh <- function(q,g,h,delta) {
+  Zp1 <- qnorm(q[,1])
+  Zp2 <- qnorm(q[,2])
+  if (g==0) x=Zp1*exp((h*Zp1^2)/2)+delta else x=((exp(g*Zp1)-1)/g)*exp((h*Zp1^2)/2)+delta
+  if (g==0) y=Zp2*exp((h*Zp2^2)/2) else y=((exp(g*Zp2)-1)/g)*exp((h*Zp2^2)/2)
+  cbind(x,y)
+}
+
+# Permutation functions
+paired <- function(x1, x2){
+  n <- length(x1)
+  y1 <- y2 <- numeric(n)
+  for(i in 1:n){ 
+    u <- runif(1)
+    if ((u-0.5) <= 0){
+      y1[i] <- x1[i]
+      y2[i] <- x2[i]
+    } 
+    else{
+      if((u-0.5) > 0){ 
+        y1[i] <- x2[i]
+        y2[i] <- x1[i] 
+      }
+    }
+  }
+  return(list("y1" = y1,"y2" = y2))
+}
+
+unpaired <- function(x1,x2){
+  m1 <- length(x1)
+  m2 <- length(x2)
+  c_var <- c(x1,x2)
+  n=length(c_var)
+  y=sample(c_var,replace=F)
+  y1=y[1:m1]
+  y2=y[(m1+1):n]
+  return(list("y1"=y1,"y2"=y2))
+}
+
+newdata <- function(n, n1, n2, mu1, mu2, corr, delta, g, h){
+  #Mean
+  mu <- c(mu1, mu2)
+  
+  #Correlation matrix
+  normCor <- matrix(c(1, corr, corr, 1), nrow = 2)
+  
+  #Generate data from Normal distribution
+  initdat <- mvrnorm(n=n+n1+n2, mu=mu, Sigma=normCor)
+
+  pvars1 <- pnorm(initdat[,1])
+  pvars2 <- pnorm(initdat[,2])
+  pvars <- cbind(pvars1, pvars2)
+  data <- qgh(q=pvars, g=g, h=h, delta=delta)
+
+  #Delete missing data from variables
+  if((n1 != 0) && (n2 != 0)){
+    data[1:n2,1] <- NA
+    data[(n+n2+1):(n+n1+n2),2] <- NA
+    
+    #Rename data to paired and unpaired
+    xp <- data[(n2+1):(n+n2),1]
+    yp <- data[(n2+1):(n+n2),2]
+    xu <- data[(n+n2+1):(n+n1+n2),1]
+    yu <- data[1:n2,2]
+  }
+  else {
+    xp <- data[,1]
+    yp <- data[,2]
+    xu <- NA
+    yu <- NA
+  }
+  
+  #Sample correlation
+  r <- cor(xp, yp, method="spearman")
+  
+  return(list("xp"=xp,"yp"=yp,"xu"=xu,"yu"=yu,"r"=r,"n"=n,"n1"=n1,"n2"=n2))
+}
+
+```
+
+## Tail weight functions
+```{r}
+# Hoaglin's method
+tw_hoaglin <- function(x) {
+  y <- ((quantile(x,.99)-median(x))/(quantile(x,.75)-median(x)))/
+    ((qnorm(0.99)-qnorm(0.5))/(qnorm(0.75)-qnorm(0.5)))
+  return(y)
+}
+
+# Ortega's method
+tw_ortega <- function(x) {
+  c<-1.5718
+  tail_set <- x[(abs((x-mean(x))/sd(x))>c)]
+  k<-length(tail_set)
+  z<-(1/k)*(abs((tail_set-mean(x))/sd(x)))
+  return(sum(z))
+}
+```
+
+
+## Test Functions
+```{r}
+# Magel and Fu (2014)
+# M[j] <- magel(.)
+magel <- function(n,n1,n2,xp,xu,yp,yu){
+  Sobs=wilcox.test(xp,yp,alternative="t",paired=TRUE,exact=TRUE)$statistic
+  Uobs=wilcox.test(xu,yu,alternative="t",paired=FALSE,exact=TRUE)$statistic
+  mus <- n*(n+1)/4
+  vars <- n*(n+1)*(2*n+1)/24
+  muu <- n1*n2/2
+  varu <- n1*n2*(n1+n2+1)/12
+  if((n1 != 0) && (n2 != 0)){
+    M = (1/sqrt(2))*(((Sobs-mus)/sqrt(vars))+((Uobs-muu)/sqrt(varu)))
+  } else{
+    M = ((Sobs-mus)/sqrt(vars))
+  }
+  return(M)
+}
+
+
+# Dubnicka asymptotic
+# D <- dubni_asym(.)[1]; Dw <- dubni_asym(.)[2]
+dubni_asym <- function(n, n1, n2, xp, xu, yp, yu){
+  mus <- n*(n+1)/4
+  vars <- n*(n+1)*(2*n+1)/24
+  muu <- n1*n2/2
+  varu <- n1*n2*(n1+n2+1)/12
+  if((n1 != 0) && (n2 != 0)){
+    N=n1+n2
+    wr=2/((n*N)+(2*n1*n2))
+    Sobs=wilcox.test(xp,yp,alternative="t",paired=TRUE,exact=TRUE)$statistic
+    Uobs=wilcox.test(xu,yu,alternative="t",paired=FALSE,exact=TRUE)$statistic
+    Robs=Sobs+Uobs
+    Rwobs=((N/(n+1))*wr*Sobs)+(wr*Uobs)
+    D = (Robs-(mus+muu)-(1/2))/sqrt(vars+varu)
+    # Sz = (Sobs-mus)/sqrt(vars); Uz = (Uobs-muu)/sqrt(varu)
+    Dw = (Rwobs-(1/2))/sqrt(((((N/(n+1))*wr)^2)*vars)+(((wr)^2)*varu))
+  } else{
+    wr=1
+    Sobs=wilcox.test(xp,yp,alternative="t",paired=TRUE,exact=TRUE)$statistic
+    Robs=Sobs
+    Rwobs=wr*Sobs
+    
+    D = (Robs-(mus+muu)-(1/2))/sqrt(vars+varu)
+    # Sz = (Sobs-mus)/sqrt(vars); Uz = (Uobs-muu)/sqrt(varu)
+    Dw = D
+  }
+  D_vec <- c(D, Dw)
+  return(D_vec)
+}
+
+
+# Bhoj
+# Zb <- bhoj_zb(.)
+bhoj_zb <- function(n, n1, n2, xp, xu, yp, yu){
+  if ((n1 == 0) && (n2 == 0)){
+    Bhoj <- t.test(xp,yp,alternative = "two.sided",paired = TRUE, var.equal = TRUE)
+    Zb <- Bhoj$statistic
+  } else{
+    xbar1 <- mean(xp)
+    xbar2 <- mean(xu)
+    ybar1 <- mean(yp)
+    ybar2 <- mean(yu)
+    a11 <- sum((xp-xbar1)^2)
+    a22 <- sum((yp-ybar1)^2)
+    a12 <- sum((xp-xbar1)*(yp-ybar1))
+    b1 <- sum((xu-xbar2)^2)
+    b2 <- sum((yu-ybar2)^2)
+    u <- (2*a12)/(a11+a22)
+    w <- (n1*(n+((1+u)*n2)))/((n*(n1+n2))+(2*(1+u)*n1*n2))
+    s <- (1+u)/2
+    f1 <- n-1
+    f2 <- n1+n2-2
+    f3 <- n+n1+n2-3
+    d2 <- 2*xbar2-xbar1-ybar1
+    d3 <- xbar1+ybar1-2*ybar2
+    d <- w*d2-(1-w)*d3
+    t1 <- ((xbar1-ybar1)*sqrt(n))/sqrt((a11+a22-2*a12)/(n-1))
+    t3 <- d/sqrt(((4*s*(b1+b2)+a11+a22+2*a12)/(n+n1+n2-3))*((w^2/s*n1)+(((1-w)^2)/s*n2)+(((1-2*w)^2)/n)))
+    F1 <- 1+((2*t1^2)/f1)+(2*t1/sqrt(f1))*sqrt(1+((t1^2)/f1))
+    F3 <- 1+((2*t3^2)/f3)+(2*t3/sqrt(f3))*sqrt(1+((t3^2)/f3))
+    if(F1<1){
+      F1 = 1/F1
+      }
+    if(F3<1){
+      F3 = 1/F3
+      }
+    U1 <- ((1-(2/(9*f1)))*(F1^(1/3)-1))/sqrt((2/(9*f1))*(F1^(2/3)+1))
+    U3 <- ((1-(2/(9*f3)))*(F3^(1/3)-1))/sqrt((2/(9*f3))*(F3^(2/3)+1))
+    lb <- 1/(1+sqrt((n1*n2*(1-u))/(2*n*n2*(w^2)+2*n*n1*((1-w)^2)+n1*n2*((1-2*w)^2)*(1+u))))
+    Zb <- (lb*U1+(1-lb)*U3)/sqrt((lb^2)+(1-lb)^2)
+  }
+  return(Zb)
+}
+
+
+# Einsporn and Habtzghi (2013)
+# calculates test statistic, T
+# Tobs[j] <- einshab_t(.)
+einshab_t <- function(n, n1, n2, xp, xu, yp, yu,r){
+  wt=(1/n2+1/n1)/((2-2*r)/n +(1/n2+1/n1))
+  if(n==0){
+    wt=0
+  }
+  if((n1==0)&&(n2==0)){
+    wt=1
+    Tobs=wt*(mean(xp)-mean(yp))
+  } else{
+    Tobs=wt*(mean(xp)-mean(yp))+(1-wt)*(mean(xu)-mean(yu))
+  }
+  return(Tobs)
+}
+
+# Einsporn and Habtzghi permutations
+# performs permutations; makes call to einshab_t
+# pt <- perm_stats(.)
+perm_stats <- function(n, n1, n2, xp, xu, yp, yu, r, np=566){
+  t10 <- rep(NA,np)
+
+  pt = 0
+
+  Tobs <- einshab_t(n, n1, n2, xp, xu, yp, yu,r)
+
+  for (i in 1:np) {
+      permp = paired(xp,yp)
+      ap=permp$y1; bp=permp$y2
+      Tp=mean(ap)-mean(bp)
+      if((n1 != 0) && (n2 != 0)){
+        wt <- (1/n2+1/n1)/((2-2*r)/n +(1/n2+1/n1))
+        permu=unpaired(xu,yu)
+        au=permu$y1;bu=permu$y2
+        Tu=mean(au)-mean(bu)
+        t10[i]=wt*(Tp)+(1-wt)*(Tu)
+      } else {
+        wt <- 1
+        t10[i]=wt*(Tp)
+      }
+      if(t10[i]>=Tobs) pt=pt+1
+    } 
+  return(pt)
+}
+
+
+# Adaptive test
+adpt_rt <- function(n, n1, n2, xp, xu, yp, yu,  method=c("minimum", "centered"), np=566, c0=1){
+    
+  # processing data for TW calculations
+  xall <- c(xp,xu); xall.center <- xall-median(xall)
+  yall <- c(yp,yu); yall.center <- yall-median(yall)
+  all_paired <- c(xall.center, yall.center)
+  
+  r <- cor(xall, yall)
+  if(method=="minimum"){
+    Ctw.min <- min(tw_hoaglin(xall), tw_hoaglin(yall)) # minimum
+    if(Ctw.min <= c0){
+      adpt.stat <- einshab_t(n,n1,n2,xp,xu,yp,yu)
+      perm.stat <- perm_stats(n, n1, n2, xp, xu, yp, yu, r, np)
+      pval <- perm.stat/np
+      results <- c("TW"=Ctw.min, "TW method"="minimum", "Test Used"="T", 
+                   "Test Statistic"=adpt.stat, "p value"=pval)
+    }
+    else{
+      adpt.stat <- dubni_asym(n, n1, n2, xp, xu, yp, yu)[1]
+      pval <- pnorm(adpt.stat, lower.tail = FALSE)
+      results <- c("TW"=Ctw.min, "TW method"="minimum", "Test Used"="Rz", 
+                   "Test Statistic"=adpt.stat, "p value"=pval)
+    }
+    
+  }
+  else{
+    Ctw.cent <- tw_hoaglin(all_paired) # centered
+    if(Ctw.cent <= c0){
+      adpt.stat <- einshab_t(n,n1,n2,xp,xu,yp,yu)
+      perm.stat <- perm_stats(n, n1, n2, xp, xu, yp, yu, r, np)
+      pval <- perm.stat/np
+      results <- c("TW"=Ctw.cent, "TW method"="centered", "Test Used"="T", 
+                   "Test Statistic"=adpt.stat, "p value"=pval)
+    }
+    else{
+      adpt.stat <- dubni_asym(n, n1, n2, xp, xu, yp, yu)[1]
+      pval <- pnorm(adpt.stat, lower.tail=FALSE)
+      results <- c("TW"=Ctw.cent, "TW method"="centered", "Test Used"="Rz", 
+                   "Test Statistic"=adpt.stat, "p value"=pval)
+    }
+  }
+  return(results)
+}
+
+
+
+
+# working example
+# d <- newdata(n=9, n1=3, n2=3, mu1=0, mu2=0, corr=.5, delta=0, g=0, h=0)
+# xp <- d$xp;  yp <- d$yp
+# xu <- d$xu; yu <- d$yu
+# n <- d$n;  n1 <- d$n1; n2 <- d$n2
+# r <- d$r
+
+# einshab_t(n,n1,n2,xp,xu,yp,yu,r)
+# dubni(n,n1,n2,xp,xu,yp,yu)
+# magel(n,n1,n2,xp,xu,yp,yu)
+# dubni_asym(n, n1, n2, xp, xu, yp, yu)[1]
+# bhoj_zb(n, n1, n2, xp, xu, yp, yu)
+# perm_stats(n, n1, n2, xp, xu, yp, yu, r)
+# adpt_rt(n,n1,n2,xp,xu,yp,yu,r,method="minimum")
+# adpt_rt(n,n1,n2,xp,xu,yp,yu,r,method="centered")
+```
+
+
+
+
+## Adaptive Test Simulations, Fixed Distributions
+```{r}
+## Simulation setup/parameters
+np <- 566; m = 1000
+n_mat <- matrix(c(9,6,30,20,30,45, 3,4,10,15,23,15, 3,5,10,15,22,15), ncol=3, byrow=F)
+colnames(n_mat) <- c("np", "nux", "nuy")
+
+
+mu1 = 0; mu2 = 0
+c0 <- 1
+delta_vec <- c(0,0.5,1)
+corr_vec <- c(0.5,0.9)
+
+
+gh_mat <- matrix(c(0,0,0,.25,0,0.5,.4,0,.4,.25,.4,.5,.8,0,.8,.25,.8,.5), ncol=2, byrow=T)
+colnames(gh_mat) <- c("g", "h")
+
+D = rep(NA,m); Dw = rep(NA,m); M = rep(NA,m) 
+Robs = rep(NA,m); Rwobs = rep(NA,m); W = rep(NA,m); 
+t.stat = rep(NA,m); Tobs = rep(NA,m); Zb = rep(NA,m)
+ANP <- rep(NA, m)
+
+pwr.t = 0; pwr.zb = 0; pwr.m = 0; pwr.ttest = 0
+pwr.d = 0; pwr.dw = 0; pwr.w = 0; pwr.amin = 0; pwr.acent = 0
+
+
+res_names <- c("np", "nux", "nuy", "g", "h", "corr", "delta", "Zb", "T", "M", "Ttest", "R", "Rw", "W", "Amin", "Acent")
+
+results <- matrix(nrow=length(corr_vec), ncol=length(res_names))
+colnames(results) <- res_names
+
+
+# Set values of delta, n, n1, n2, g, and h
+delta <- delta_vec[1]
+n <- n_mat[1,1]; n1 <- n_mat[1,2]; n2 <- n_mat[1,3]
+g <- gh_mat[1,1]; h <- gh_mat[2,1]
+
+# run simulation
+set.seed(2018)
+start <- Sys.time()
+for(k in 1:length(corr_vec)){
+  corr <- corr_vec[k]
+  for (j in 1:m){
+    # data generation and assignment
+    dat <- newdata(n=n, n1=n1, n2=n2, mu1=0,mu2=0, 
+                   corr=corr, delta=delta, g=0, h=0)
+    xp <- dat$xp; yp <- dat$yp
+    xu <- dat$xu; yu <- dat$yu
+    r <- dat$r
+    
+    # tw prep
+    xall <- c(xp,xu); xall.center <- xall-median(xall)
+    yall <- c(yp,yu); yall.center <- yall-median(yall)
+    all_paired <- c(xall.center, yall.center)
+    
+    # tw calculations
+    Ctw.cent <- tw_hoaglin(all_paired) # centered
+    Ctw.min <- min(tw_hoaglin(xall), tw_hoaglin(yall))
+    
+
+    # Dubnicka Asymptotic
+    D[j] <- dubni_asym(n, n1, n2, xp, xu, yp, yu)[1]
+    Dw[j] <- dubni_asym(n, n1, n2, xp, xu, yp, yu)[2]
+
+    # Magel
+    M[j] <- magel(n,n1,n2,xp,xu,yp,yu)
+    
+    # Bhoj
+    Zb[j] <- bhoj_zb(n, n1, n2, xp, xu, yp, yu)
+    
+    # Paired t-test
+    ttest <- t.test(xp,yp,alternative = "two.sided",paired = TRUE, var.equal = TRUE)
+    t.stat[j] <- ttest$statistic
+    
+    # Signed Rank test
+    W.test <- wilcox.test(xp,yp,alternative = "two.sided", paired = TRUE, exact = TRUE)
+    W[j] <- W.test$statistic
+    
+    # Inner Permutation loop, w/o Johnson&Richter; E&H
+    pt <- perm_stats(n, n1, n2, xp, xu, yp, yu, r, jr_perm=F)
+    
+    # Zb pvalue
+    if ((n1 == 0) && (n2 == 0)){
+      pvalue.zb <- Bhoj$p.value
+    } 
+    else{
+      pvalue.zb <- pnorm(Zb[j],lower.tail = FALSE)
+    }
+    
+    pvalue.t <- pt/np
+    pvalue.m <- pnorm(M[j],lower.tail = FALSE)
+    pvalue.ttest <- ttest$p.value
+    pvalue.d <- pnorm(D[j],lower.tail = FALSE)
+    pvalue.dw <- pnorm(Dw[j],lower.tail = FALSE)
+    pvalue.w <- W.test$p.value
+    
+    # pvalue amin
+    if(Ctw.min<=c0){
+      pvalue.amin <- pvalue.t # select T if TW measure is at/below cutoff
+    }
+    else{
+      pvalue.amin <- pvalue.d # else select Rz
+    }
+    
+    # pvalue acent
+    if(Ctw.cent<=c0){
+      pvalue.acent <- pvalue.t # select T if TW measure is at/below cutoff
+    }
+    else{
+      pvalue.acent <- pvalue.d # else select Rz
+    }
+    
+    # increment correct rejections
+    if(pvalue.zb<0.05) pwr.zb=pwr.zb+1
+    if(pvalue.t<0.05) pwr.t=pwr.t+1
+    if(pvalue.m<0.05) pwr.m=pwr.m+1
+    if(pvalue.ttest<0.05) pwr.ttest=pwr.ttest+1
+    if(pvalue.d<0.05) pwr.d=pwr.d+1
+    if(pvalue.dw<0.05) pwr.dw=pwr.dw+1
+    if(pvalue.w<0.05) pwr.w=pwr.w+1
+    if(pvalue.amin<0.05) pwr.amin=pwr.amin+1
+    if(pvalue.acent<0.05) pwr.acent=pwr.acent+1
+    
+    
+    # indicator
+    if(j%%100==0){
+      cat(paste("Sample", j,"done\n"))
+    }
+  }
+  
+  # store results
+  results[k, ] <- c(n, n1, n2, g, h, corr, delta, pwr.zb/m, pwr.t/m, pwr.m/m, pwr.ttest/m, pwr.d/m, pwr.dw/m, pwr.w/m, pwr.amin/m, pwr.acent/m)
+  
+  # Reset test statistic storage
+  D = rep(NA,m); Dw = rep(NA,m); M = rep(NA,m) 
+  W = rep(NA,m); t.stat = rep(NA,m); Zb = rep(NA,m)
+  
+  # reset rejection values for each outer loop value
+  pwr.t = 0; pwr.zb = 0; pwr.m = 0; pwr.ttest = 0 
+  pwr.d = 0; pwr.dw = 0; pwr.w = 0; pwr.amin = 0; pwr.acent = 0
+  
+  cat(paste("Simulation", k, "done\n"))
+}
+(elapsed <- Sys.time()-start)
+```
+
+
+## Adaptive Test Results, Random distributions
+```{r}
+##### Pre-sim setup #####
+m = 1000; ndraws = 10; np <- 566
+n_mat <- matrix(c(9,6,30,20,45,30, 3,4,10,15,15,23, 3,5,10,15,15,22), ncol=3, byrow=F)
+colnames(n_mat) <- c("np", "nux", "nuy")
+
+myn_mat <- n_mat[4:6,]
+
+mu1 = 0; mu2 = 0
+c0 <- 1
+delta_vec <- c(0,0.5,1)
+
+# bounds for g, h, corr
+g.low <- 0; g.upp <- 1
+h.low <- 0; h.upp <- 0.5
+
+
+# randomly draw ndraws g,h
+set.seed(2018)
+g_vec <- runif(ndraws, min=g.low, max=g.upp)
+h_vec <- runif(ndraws, min=h.low, max=h.upp)
+g_vec <- gh_mat[,1]
+h_vec <- gh_mat[,2]
+
+
+# initialize correlation vector
+corr_vec <- c(0,.5,.9)
+
+# test stat storage
+D = rep(NA,m); Zb = rep(NA,m) 
+# Amin <- rep(NA, m); Acent <- rep(NA, m)
+
+
+# correct rejection counters
+pwr.t = 0; pwr.d = 0
+pwr.amin = 0; pwr.acent = 0
+
+
+# results setup
+res_names <- c("np", "nux", "nuy", "delta", "g", "h", "corr", "T", "R", "Amin", "Acent")
+results <- matrix(nrow=ndraws, ncol=length(res_names))
+colnames(results) <- res_names
+
+
+# set values for delta, corr, n, n1, and n2
+delta <- delta_vec[1]
+corr <- corr_vec[1]
+n <- myn_mat[1,1]; n1 <- myn_mat[1,2]; n2 <- myn_mat[1,3]
+
+# run simulation
+set.seed(2018)
+start <- Sys.time()
+for(k in 1:ndraws){
+  g <- g_vec[k]; h <- h_vec[k]; 
+  for (j in 1:m){
+    # data generation and assignment
+    dat <- newdata(n=n, n1=n1, n2=n2, mu1=0,mu2=0, 
+                   corr=corr, delta=delta, g=g, h=h)
+    xp <- dat$xp; yp <- dat$yp
+    xu <- dat$xu; yu <- dat$yu
+    r <- dat$r
+    
+    # tw prep
+    xall <- c(xp,xu); xall.center <- xall-median(xall)
+    yall <- c(yp,yu); yall.center <- yall-median(yall)
+    all_paired <- c(xall.center, yall.center)
+    
+    # tw calculations
+    Ctw.cent <- tw_hoaglin(all_paired) # centered
+    Ctw.min <- min(tw_hoaglin(xall), tw_hoaglin(yall))
+    
+    
+    # Dubnicka Asymptotic, D (R when making final tables)
+    D[j] <- dubni_asym(n, n1, n2, xp, xu, yp, yu)[1] 
+    
+    # Bhoj, Zb
+    # Zb[j] <- bhoj_zb(n, n1, n2, xp, xu, yp, yu)
+    
+    #Inner Permutation loop, w/o Johnson&Richter; E&H
+    pt <- perm_stats(n, n1, n2, xp, xu, yp, yu, r, jr_perm=F)
+    
+
+    
+    # pvalue dubnicka
+    pvalue.d <- pnorm(D[j],lower.tail = FALSE)
+    
+    # pvalue T
+    pvalue.t <- pt/np
+      
+    # pvalue amin
+    if(Ctw.min<=c0){
+      pvalue.amin <- pvalue.t
+    }
+    else{
+      pvalue.amin <- pvalue.d
+    }
+    
+    # pvalue acent
+    if(Ctw.cent<=c0){
+      pvalue.acent <- pvalue.t
+    }
+    else{
+      pvalue.acent <- pvalue.d
+    }
+    
+    
+    # power calculations
+    if(pvalue.t<0.05) pwr.t=pwr.t+1
+    if(pvalue.d<0.05) pwr.d=pwr.d+1
+    if(pvalue.amin<0.05) pwr.amin=pwr.amin+1
+    if(pvalue.acent<0.05) pwr.acent=pwr.acent+1
+    
+    # data progress indicator
+    if(j%%100==0){
+      cat(paste("Sample", j,"done\n"))
+    }
+  }
+  
+  results[k, ] <- c(n, n1, n2, delta, g, h, corr, pwr.t/m, pwr.d/m, pwr.amin/m, pwr.acent/m)
+  
+  # reset storage vectors
+  D = rep(NA,m)
+  
+  pwr.t = 0; pwr.d = 0
+  pwr.amin = 0; pwr.acent = 0
+  
+  
+  cat(paste("Simulation", k, "done\n"))
+}
+(elapsed <- Sys.time()-start)
+```
+
+## Tail weight classifier sims
+```{r}
+# initialize corr, gh, and n matrices
+corr_vec <- c(0,0.5,0.9)
+
+gh_mat <- matrix(c(0,0,0,.25,0,0.5,.4,0,.4,.25,.4,.5,.8,0,.8,.25,.8,.5), ncol=2, byrow=T)
+colnames(gh_mat) <- c("g", "h")
+
+n_mat <- matrix(c(9,6,30,20,45,30, 3,4,10,15,15,23, 3,5,10,15,15,22), ncol=3, byrow=F)
+colnames(n_mat) <- c("np", "nux", "nuy")
+
+
+# create results matrices
+names <- c("c0", "corr","np","nux","nuy","g", "h", "% pick lt", "% pick ht")
+results1 <- matrix(NA, nrow=nrow(gh_mat), ncol = length(names))
+colnames(results1) <- names
+for(i in 2:18) assign(paste0("results",i),results1)
+
+
+# Select (uncomment) the appropriate cutoff
+
+# c0 <- 2 # ortega cutoff
+# c0 <- 1 # hoaglin cutoff
+
+# initialize accuracy indicators
+pick_lt <- 0
+pick_ht <- 0
+
+# number of data sets to generate per sim
+
+m <- 1000 
+
+set.seed(384925)
+for(s in 1:nrow(n_mat)){
+  n<-n_mat[s,1]; n1<-n_mat[s,2]; n2<-n_mat[s,3]
+  
+    for(k in 1:length(corr_vec)){
+    corr <- corr_vec[k]
+    
+    for(i in 1:nrow(gh_mat)){
+      g <- gh_mat[i,1]; h <- gh_mat[i,2]
+      
+      for(j in 1:m){
+        dat <- newdata(n=n,n1=n1,n2=n2,mu1=0,mu2=0,corr=corr,delta=0,g=g,h=h)
+        xp <- dat$xp; yp <- dat$yp
+        xu <- dat$xu; yu <- dat$yu
+
+
+        xall <- c(xp,xu); xall.center <- xall-median(xall)
+        yall <- c(yp,yu); yall.center <- yall-median(yall)
+        all_paired <- c(xall.center, yall.center)
+
+
+        # Select (uncomment) which method to test
+        
+        # Ortega's method
+        # Ctw <- tw_ortega(all_paired) # centered
+        # Ctw <- tw_ortega(c(xall, yall)) # comb
+        # Ctw <- mean(tw_ortega(xall), tw_ortega(yall)) # mean
+        # Ctw <- min(tw_ortega(xall), tw_ortega(yall)) # minimum
+
+        # Hoaglin's method
+        # Ctw <- tw_hoaglin(all_paired) # centered
+        # Ctw <- tw_hoaglin(c(xall, yall)) # comb
+        # Ctw <- mean(tw_hoaglin(xall), tw_hoaglin(yall)) # mean
+        # Ctw <- min(tw_hoaglin(xall), tw_hoaglin(yall)) # minimum
+
+
+
+        if(Ctw <= c0){
+          pick_lt <- pick_lt + 1 # counter for picking T
+        }
+        else{
+          pick_ht <- pick_ht + 1 # counter for picking W
+        }
+
+        if((s==1) && (k==1)){
+          results1[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==1) && (k==2)){
+          results2[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==1) && (k==3)){
+          results3[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==2) && (k==1)){
+          results4[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==2) && (k==2)){
+          results5[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==2) && (k==3)){
+          results6[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==3) && (k==1)){
+          results7[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==3) && (k==2)){
+          results8[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==3) && (k==3)){
+          results9[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==4) && (k==1)){
+          results10[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==4) && (k==2)){
+          results11[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==4) && (k==3)){
+          results12[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==5) && (k==1)){
+          results13[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==5) && (k==2)){
+          results14[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==5) && (k==3)){
+          results15[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==6) && (k==1)){
+          results16[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else if((s==6) && (k==2)){
+          results17[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        } else{
+          results18[i,] <- c(c0, corr, n, n1, n2, g, h, pick_lt/m, pick_ht/m)
+        }
+      }
+    pick_lt <- pick_ht <- 0
+    }
+  }
+}
+```
+
+## Tail weight Distributions
+```{r}
+corr_vec <- c(0,0.5,0.9)
+g_vec <- c(0,.4,.8)
+
+n_mat <- matrix(c(9,6,30,20,45,30, 3,4,10,15,15,23, 3,5,10,15,15,22), ncol=3, byrow=F)
+colnames(n_mat) <- c("np", "nux", "nuy")
+
+
+# number of data sets to generate per sim
+m <- 10000 
+
+# initialize results matrix
+resnames <- c("tau_cent", "tau_mean", "tau_comb", "tau_min",
+              "Ctw_cent", "Ctw_mean", "Ctw_comb", "Ctw_min")
+results <- matrix(NA, nrow=m, ncol=8)
+colnames(results) <- resnames
+
+
+# pick values of n, n1, n2, g, h, and corr
+n <- n_mat[1,1]; n1 <- n_mat[1,2]; n2 <- n_mat[1,3]
+g <- g_vec[3]; h <- 0
+corr <- corr_vec[3]
+
+
+set.seed(2018)
+start <- Sys.time()
+for(j in 1:m){
+  dat <- newdata(n=n,n1=n1,n2=n2,mu1=0,mu2=0,corr=corr,delta=0,g=g,h=h)
+  xp <- dat$xp; yp <- dat$yp
+  xu <- dat$xu; yu <- dat$yu
+  
+  
+  xall <- c(xp,xu); xall.center <- xall-median(xall)
+  yall <- c(yp,yu); yall.center <- yall-median(yall)
+  all_paired <- c(xall.center, yall.center)
+  
+  # Hoaglin's method
+  results[j,1] <- tw_hoaglin(all_paired) # centered
+  results[j,2] <- mean(tw_hoaglin(xall), tw_hoaglin(yall)) # mean
+  results[j,3] <- tw_hoaglin(c(xall, yall)) # combined
+  results[j,4] <- min(tw_hoaglin(xall), tw_hoaglin(yall)) # minimum
+  
+  
+  # Ortega's method
+  results[j,5] <- tw_ortega(all_paired) # centered
+  results[j,6] <- mean(tw_ortega(xall), tw_ortega(yall)) # mean
+  results[j,7] <- tw_ortega(c(xall, yall)) # comb
+  results[j,8] <- min(tw_ortega(xall), tw_ortega(yall)) # minimum
+
+  if(j%%1000==0){
+    cat("sim", j, "completed\n")
+  }
+}
+(elapsed <- Sys.time() - start)
+```
